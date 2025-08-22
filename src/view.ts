@@ -1,0 +1,243 @@
+import { COLORS, CHANNEL_COUNT, ROW_H, SIGNAL_H, PIN_LABEL_W, SCROLLBAR_H, GRID_DASH, TIME_DASH } from './constants';
+import type { Config, Cursor } from './types';
+import type { LogicData } from './model';
+import { clamp } from './utils';
+
+export class View {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  config: Config;
+  xEdge = PIN_LABEL_W;
+  yEdge = 10;
+  yBottom = 0;
+  scrollBar = { left: PIN_LABEL_W, width: 20, height: SCROLLBAR_H, top: 0, dragging: false };
+  drawTimes = true;
+  xShift = 0;
+  data: LogicData | null = null;
+  timeFormat: 'ms' | 'μs' = 'ms';
+  reducer = 1.0;
+  requested = false;
+  cursor: Cursor = { sample: 0, channel: CHANNEL_COUNT, enabled: false };
+  pixelRatio = 1;
+  pinArduinoNames: number[] = new Array(CHANNEL_COUNT).fill(0);
+
+  private _xPos: number[] = new Array(CHANNEL_COUNT).fill(0);
+  private _isLow = new Map<string, boolean>();
+
+  constructor(canvas: HTMLCanvasElement, config: Config) {
+    this.canvas = canvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas 2D no disponible');
+    this.ctx = ctx;
+    this.config = config;
+    this.recomputePinLabels();
+    this.installEvents();
+    this.resize();
+  }
+
+  recomputePinLabels() {
+    // Mapear nombres visibles: mantenemos simple (PIN n) salvo STM32F1 (PB n)
+    this.pinArduinoNames = this.config.pinAssignment.map((v) => {
+      const [pinA, pinB] = String(v).padStart(2,'0').split('').map(Number);
+      // No convertimos aquí a nombres exactos; solo marcamos activos (no cero)
+      return v === 0 ? 0 : (v >= 10 ? v : 0);
+    });
+  }
+
+  setData(data: LogicData, timeFormat: 'ms' | 'μs', reducer: number, drawTimes: boolean) {
+    this.data = data; this.timeFormat = timeFormat; this.reducer = reducer; this.drawTimes = drawTimes;
+  }
+  setDrawTimes(v: boolean) { this.drawTimes = v; }
+
+  setCursor(c: { sample: number; channel: number }, syncScroll = false) {
+    this.cursor = { ...this.cursor, ...c, enabled: true };
+    if (syncScroll && this.data?.xTime && this.data.samples > 0) {
+      const x = this.data.xTime[this.cursor.sample] ?? 0;
+      const xEnd = this.data.xTime[this.data.samples - 1] ?? 0;
+      this.setXShift(-x - (this.canvas.width / this.pixelRatio - this.scrollBar.width) / 2);
+      this.scrollBar.left = this._map(x, 0, xEnd, this.xEdge, this.canvas.width / this.pixelRatio - this.scrollBar.width);
+    }
+  }
+  clearCursor() { this.cursor.enabled = false; }
+
+  indexFromAssignment(ch: number): [number, number] {
+    const s = String(this.config.pinAssignment[ch]).padStart(2,'0');
+    const index1 = s.charCodeAt(1) - '0'.charCodeAt(0);
+    const index2 = s.charCodeAt(0) - '1'.charCodeAt(0);
+    return [index1, index2];
+  }
+
+  setScroll(px: number) {
+    const max = this.canvas.width / this.pixelRatio - this.scrollBar.width;
+    this.scrollBar.left = clamp(px, this.xEdge, max);
+    this.updateXShiftFromScroll();
+  }
+  nudgeScroll(dx: number) { this.setScroll(this.scrollBar.left + dx); this.requestDraw(); }
+  setXShift(v: number) { this.xShift = v; }
+
+  updateXShiftFromScroll() {
+    const xEnd = this.data?.xTime?.[this.data.samples - 1] ?? 0;
+    const w = this.canvas.width / this.pixelRatio - this.scrollBar.width;
+    const m = (this.scrollBar.left - this.xEdge) / (w - this.xEdge || 1);
+    this.xShift = -m * xEnd + (w) / 2 - this.xEdge / 2;
+  }
+
+  requestDraw() { if (this.requested) return; this.requested = true; requestAnimationFrame(() => { this.requested = false; this.draw(); }); }
+
+  resize() {
+    const dpi = (window.devicePixelRatio || 1);
+    this.pixelRatio = dpi;
+    const cssW = this.canvas.clientWidth || window.innerWidth;
+    const cssH = this.canvas.clientHeight || (window.innerHeight - 130);
+    this.canvas.width = Math.floor(cssW * dpi);
+    this.canvas.height = Math.floor(cssH * dpi);
+    this.ctx.setTransform(dpi, 0, 0, dpi, 0, 0);
+    this.yBottom = cssH - SCROLLBAR_H;
+    this.scrollBar.top = this.yBottom;
+    this.requestDraw();
+  }
+
+  private installEvents() {
+    window.addEventListener('resize', () => this.resize());
+    this.canvas.addEventListener('wheel', (ev) => {
+      const delta = (ev.shiftKey ? 10 : 50) * (this.timeFormat === 'ms' ? this.reducer : this.reducer * 0.001);
+      this.setScroll(this.scrollBar.left - Math.sign(ev.deltaY) * delta);
+      this.requestDraw();
+      ev.preventDefault();
+    }, { passive: false });
+    this.canvas.addEventListener('mousemove', (ev) => {
+      const p = this.pos(ev);
+      if (this.overScroll(p.x, p.y)) this.canvas.style.cursor = 'pointer';
+      else if (this.channelAt(p.x, p.y) !== -1) this.canvas.style.cursor = 'pointer';
+      else this.canvas.style.cursor = 'default';
+      if (this.scrollBar.dragging) {
+        this.setScroll(p.x - this.scrollBar.width / 2);
+        this.requestDraw();
+      }
+    });
+    this.canvas.addEventListener('mousedown', (ev) => {
+      const p = this.pos(ev);
+      if (this.overScroll(p.x, p.y)) this.scrollBar.dragging = true;
+    });
+    window.addEventListener('mouseup', () => { this.scrollBar.dragging = false; });
+  }
+
+  private pos(ev: MouseEvent) {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+  }
+  private overScroll(x: number, y: number) {
+    return x >= this.scrollBar.left && x <= this.scrollBar.left + this.scrollBar.width && y >= this.scrollBar.top && y <= this.scrollBar.top + this.scrollBar.height;
+  }
+  channelAt(x: number, y: number) {
+    if (x < this.xEdge || y < this.yEdge || y > this.yBottom) return -1;
+    const relY = y - this.yEdge;
+    const row = Math.floor(relY / ROW_H);
+    if (row < CHANNEL_COUNT) return (this.pinArduinoNames[row] !== 0) ? row : -1;
+    else if (y > this.yBottom - ROW_H) return CHANNEL_COUNT;
+    return -1;
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const W = this.canvas.width / this.pixelRatio;
+    const H = this.canvas.height / this.pixelRatio;
+    ctx.fillStyle = COLORS.black; ctx.fillRect(0,0,W,H);
+    this.drawLabelsAndGrid(W,H);
+    this.drawCursor(W,H);
+    this.drawSignals(W,H);
+    this.drawScrollBar();
+  }
+
+  private drawLabelsAndGrid(W: number, H: number) {
+    const ctx = this.ctx;
+    ctx.strokeStyle = COLORS.white; ctx.fillStyle = COLORS.white; ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    let y = 30; const x = 5;
+    for (let i = 0; i < CHANNEL_COUNT; i++) {
+      ctx.strokeStyle = COLORS.white; ctx.beginPath(); ctx.moveTo(0, y-20); ctx.lineTo(this.xEdge, y-20); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, y+10); ctx.lineTo(this.xEdge, y+10); ctx.stroke();
+      ctx.strokeStyle = COLORS.orange; ctx.setLineDash(GRID_DASH);
+      ctx.beginPath(); ctx.moveTo(this.xEdge, y-23); ctx.lineTo(W, y-23); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(this.xEdge, y+13); ctx.lineTo(W, y+13); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = COLORS.white;
+      const label = (this.pinArduinoNames[i] === 0) ? 'PIN OFF' : `PIN ${this.pinArduinoNames[i]}`;
+      ctx.fillText(label, x, y);
+      y += ROW_H;
+    }
+    ctx.fillText(' ALL ', x, H - SCROLLBAR_H - ROW_H + 20);
+    ctx.fillText('EVENTS', x, H - SCROLLBAR_H - ROW_H + 35);
+  }
+
+  private drawCursor(W: number, H: number) {
+    const ctx = this.ctx; if (!this.cursor.enabled) return;
+    ctx.fillStyle = '#323232'; ctx.strokeStyle = '#4b4b4b';
+    if (this.cursor.channel === CHANNEL_COUNT) ctx.fillRect(0, this.yBottom - ROW_H, W - this.xEdge, ROW_H - 2);
+    else {
+      const y = this.yEdge + ROW_H * this.cursor.channel - 2;
+      ctx.fillRect(0, y, W - this.xEdge, ROW_H - 2);
+    }
+  }
+
+  private drawSignals(_W: number, _H: number) {
+    const data = this.data; if (!data || !data.ready || !data.xTime || !data.usTime) return;
+    const ctx = this.ctx;
+    ctx.save(); ctx.translate(this.xEdge, 0);
+    ctx.strokeStyle = COLORS.green; ctx.fillStyle = COLORS.green; ctx.lineWidth = 1;
+    let yPos = this.yEdge; let textCovered = false;
+    // limpiar buffers por frame
+    this._xPos = new Array(CHANNEL_COUNT).fill(0);
+    this._isLow = new Map<string, boolean>();
+    for (let i = 0; i < data.samples; i++) {
+      let cares = false; let firstchange = 0;
+      yPos = this.yEdge;
+      for (let n = 0; n < CHANNEL_COUNT; n++) {
+        if (this.pinArduinoNames[n] !== 0) {
+          const [idx1, idx2] = this.indexFromAssignment(n);
+          if (data.state![i][idx1][idx2]) {
+            cares = true; if (firstchange === 0) firstchange = yPos;
+            const ySave = yPos;
+            const key = `${idx1}-${idx2}`;
+            if (!this._isLow.has(key)) this._isLow.set(key, !((data.initial[idx2] >> idx1) & 1));
+            const wasLow = this._isLow.get(key)!;
+            const yDiff = wasLow ? yPos : (yPos + SIGNAL_H);
+            const yLine = wasLow ? (yPos + SIGNAL_H) : yPos;
+            const x0 = this._xPos[n] ?? 0;
+            const x1 = data.xTime[i] + this.xShift;
+            ctx.beginPath(); ctx.moveTo(x0, yLine); ctx.lineTo(x1, yLine); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x1, yLine); ctx.lineTo(x1, yDiff); ctx.stroke();
+            this._xPos[n] = data.xTime[i];
+            this._isLow.set(key, !wasLow);
+            yPos = ySave;
+          }
+        }
+        yPos += ROW_H;
+      }
+      if ((this.drawTimes && cares) || i === 0) {
+        ctx.setLineDash(TIME_DASH);
+        const active = (this.cursor.enabled && this.cursor.sample === i);
+        ctx.strokeStyle = active ? COLORS.red : COLORS.grey;
+        ctx.fillStyle = active ? COLORS.red : COLORS.grey;
+        ctx.beginPath();
+        ctx.moveTo(data.xTime[i] + this.xShift, firstchange);
+        ctx.lineTo(data.xTime[i] + this.xShift, this.yBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '10px ui-monospace, monospace';
+        const label = Math.round(data.usTime[i]).toString();
+        ctx.fillText(label, data.xTime[i] + this.xShift + 2, textCovered ? this.yBottom - 10 : this.yBottom);
+        textCovered = !textCovered;
+        ctx.strokeStyle = COLORS.green; ctx.fillStyle = COLORS.green;
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawScrollBar() {
+    const ctx = this.ctx;
+    ctx.fillStyle = COLORS.grey;
+    ctx.fillRect(this.scrollBar.left, this.scrollBar.top, this.scrollBar.width, this.scrollBar.height);
+  }
+
+  private _map(x: number, a: number, b: number, c: number, d: number) { return c + (d - c) * ((x - a) / (b - a || 1)); }
+}
