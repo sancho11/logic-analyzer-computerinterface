@@ -1,26 +1,165 @@
 :root {
-  --bg: #0b0b0b;
-  --panel: #121212;
-  --text: #f5f5f5;
-  --muted: #bdbdbd;
-  --accent: #00ff00;
-  --danger: #ff4d4f;
-  --grey: #969696;
-  --orange: #EF7F1A;
+  /* Design tokens (dark theme) */
+  --bg: #0b0b0b;        /* App background */
+  --panel: #121212;     /* Panel/section background */
+  --text: #f5f5f5;      /* Primary text */
+  --muted: #bdbdbd;     /* Muted text */
+  --accent: #00ff00;    /* Accent/primary action */
+  --danger: #ff4d4f;    /* Destructive/action warning */
+  --grey: #969696;      /* Neutral line/icon */
+  --orange: #EF7F1A;    /* Secondary accent */
 }
+
+/* Full-height root and body */
 html, body { height: 100%; }
-body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; }
-.topbar { display: grid; gap: .5rem; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: center; padding: .75rem 1rem; background: linear-gradient(180deg, #151515, #0f0f0f); position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 0 #1f1f1f; }
-.topbar > * { min-width: 0; }
-.btn { appearance: none; border: 1px solid #2a2a2a; background: #171717; color: var(--text); border-radius: .6rem; padding: .55rem .8rem; cursor: pointer; font-weight: 600; letter-spacing: .2px; }
-.btn:hover { background: #1d1d1d; border-color: #3a3a3a; }
-.btn.primary { background: #0e2f0e; border-color: #124612; } .btn.primary:hover { background: #134013; }
-.btn.ghost { background: transparent; }
-.kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: #1b1b1b; border: 1px solid #2a2a2a; padding: .1rem .35rem; border-radius: .375rem; }
-.right { justify-self: end; }
-.sep { height: 1px; background: #1f1f1f; }
-#status { font-size: .9rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Base document styles */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial;
+}
+
+
+/* Responsive header with wrapping */
+.topbar{
+  display: flex;
+  flex-wrap: wrap;               /* allows items to wrap to a new line */
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem 1rem;
+  background: linear-gradient(180deg,#151515,#0f0f0f);
+  position: sticky; top:0; z-index:10; box-shadow:0 1px 0 #1f1f1f;
+}
+
+/* Base size for each item in the topbar */
+.topbar > *{
+  flex: 0 1 140px;   /* grow 0, shrink 1, basis 140px */
+  min-width: 0;      /* enable proper text truncation */
+}
+
+/* #status pushes to the right and truncates */
+#status{
+  flex: 1 1 80%;
+  text-align: right;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Generic PILL (your chips/groups) */
+.pill{
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  border: 1px solid #2a2a2a;
+  background: #141414;
+  border-radius: 12px;
+  padding: .45rem .6rem;
+}
+
+/* Buttons inside the group should not stretch */
+.pill .btn { flex: 0 0 auto; }
+
+/* === Specific control for the Zoom block === */
+/* On desktop: occupies ~50% of the row
+    NOTE: current rule sets it to 15% (flex-basis + max-width). */
+.topbar .pill.zoom{
+  flex: 1 1 15%;
+  max-width: 15%;
+  justify-content: space-between; /* separates label from controls */
+}
+
+/* On medium screens: lower it to ~40% to give room to other buttons
+    NOTE: current rule uses 35%. */
+@media (max-width: 1200px){
+  .topbar .pill.zoom{ flex-basis: 35%; max-width: 35%; }
+}
+
+/* On narrow screens: make it 100% (jumps to its own row) */
+@media (max-width: 600px){
+  .topbar .pill.zoom{ flex-basis: 100%; max-width: 100%; order: 50; }
+  #status{ flex-basis: 100%; order: 99; text-align: left; } /* status moves to the end on its own line */
+}
+
+
+
+/* Canvas wrapper establishes positioning context for overlays if needed */
 #canvasWrap { position: relative; }
+
+/* Canvas fills viewport height minus header/footer; block ensures no inline gaps */
 canvas { display: block; width: 100%; height: calc(100vh - 130px); background: #000; }
-.footer { display: grid; grid-template-columns: 1fr auto; gap: 1rem; padding: .5rem 1rem 1rem; color: var(--muted); }
-.pill { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid #2a2a2a; background: #141414; border-radius: 999px; padding: .35rem .6rem; }
+
+/* Footer: compact toolbar-style layout */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .5rem 1rem;
+  border-top: 1px solid #2a2a2a;
+  background: #111;
+}
+
+/* Footer content split in two areas with spacing */
+.footer > div {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  gap: 1rem;
+}
+
+/* Each control takes at least 140px and can grow */
+.topbar > *{
+  flex: 0 1 140px;                 /* grow=0 shrink=1 basis=140px */
+  min-width: 0;                    /* enables proper truncation */
+}
+
+/* The Zoom group can grow a bit more (generic pill rule here) */
+.topbar .pill{ flex: 1 1 220px; }
+
+/* The status pushes to the right and truncates */
+#status{
+  flex: 1 1 260px;                 /* takes the remaining row space if available */
+  justify-self: end;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* On narrow screens/zoom: reduce padding and font size for denser layout */
+@media (max-width: 900px){
+  .btn{ padding: .45rem .6rem; font-size: .9rem; }
+  .pill{ padding: .4rem .6rem; }
+}
+
+/* Very narrow: let the status drop to its own full-width line at the end */
+@media (max-width: 700px){
+  #status{ flex-basis: 100%; order: 99; }  /* occupies a full row at the end */
+}
+
+/* Base pill shape (this later rule overrides earlier .pill specifics via cascade) */
+.pill {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  border: 1px solid #2a2a2a;
+  background: #141414;
+  border-radius: 999px;            /* fully rounded pill */
+  padding: .35rem .6rem;
+}
+
+/* Informational pill variant: denser, subtle contrast, small type */
+.info-pill {
+  flex:1;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  border: 1px solid #2a2a2a;
+  background: #1b1b1b;
+  border-radius: 12px;
+  padding: .6rem .9rem;
+  font-size: 0.75rem;
+  color: #ddd;
+}
+  

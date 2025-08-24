@@ -13,7 +13,7 @@ export class SerialTransport implements Transport {
 
   async connect(): Promise<void> {
     // @ts-expect-error web-serial types at runtime
-    if (!('serial' in navigator)) { this.onStatus('Web Serial no disponible'); throw new Error('Web Serial no soportado'); }
+    if (!('serial' in navigator)) { this.onStatus('Web Serial not available'); throw new Error('Web Serial not supported'); }
     // @ts-expect-error requestPort exists
     this.port = await navigator.serial.requestPort();
     await this.port.open({ baudRate: this.baud });
@@ -36,7 +36,7 @@ export class SerialTransport implements Transport {
     this.reader = lineStream.getReader();
     this.writer = textEncoder.writable.getWriter();
     this.closed = false;
-    this.onStatus('Conectado');
+    this.onStatus('Connected');
     this.readLoop();
   }
 
@@ -48,12 +48,12 @@ export class SerialTransport implements Transport {
         if (value != null) this.onLine(String(value).trim());
       }
     } catch (e) {
-      this.onStatus('Lectura detenida: ' + e);
+      this.onStatus('Read stopped: ' + e);
     }
   }
 
   async write(text: string): Promise<void> {
-    if (!this.writer) throw new Error('Puerto no abierto');
+    if (!this.writer) throw new Error('Port not open (Check browser permissions for using tty)');
     await this.writer.write(text);
   }
 
@@ -62,7 +62,7 @@ export class SerialTransport implements Transport {
     try { await this.reader?.cancel(); } catch {}
     try { await this.writer?.close(); } catch {}
     try { await this.port?.close(); } catch {}
-    this.onStatus('Desconectado');
+    this.onStatus('Disconnected');
   }
 }
 
@@ -70,32 +70,65 @@ export class SerialTransport implements Transport {
 export class SimulationTransport implements Transport {
   onLine: (line: string) => void = () => {};
   onStatus: (text: string) => void = () => {};
-  private timer: any = null;
   private running = false;
 
+  /**
+   * @param basePeriodUs  Período (µs) del reloj más rápido (bit 0)
+   * @param numClocks     Número de relojes a generar (máx. 24 -> 3 bytes)
+   * @param samples       Número de muestras (eventos de “toggle”) a emitir
+   */
+  constructor(
+    private basePeriodUs = 1000,
+    private numClocks = 24,
+    private samples = 120
+  ) {}
+
   async connect(): Promise<void> {
-    this.onStatus('Simulador listo'); 
+    this.onStatus('Simulator Ready');
   }
+
   async write(text: string): Promise<void> {
-    if (text !== 'G') return;
-    if (this.running) return;
+    if (text !== 'G' || this.running) return;
     this.running = true;
+
     this.onLine('S');
-    // Estado inicial + muestras
-    const samples = 120;
-    const init = [0b00001111, 0b10101010, 0b01010101];
+
+    // Estados iniciales: todos bajos (0). Tres bytes -> hasta 24 canales.
+    const init = [0,0,0];
+    const samples = Math.max(1, this.samples);
+    const N = Math.max(1, Math.min(this.numClocks, 24));
     this.onLine(init.join(',') + ':' + samples);
-    let t = 0;
-    // Crear toggles pseudo-aleatorios pero repetibles
-    for (let i = 0; i < samples; i++) {
-      const a = (i % 7 === 0) ? 1<< (i%8) : 0;
-      const b = (i % 5 === 0) ? 1<< ((i+2)%8) : 0;
-      const c = (i % 3 === 0) ? 1<< ((i+4)%8) : 0;
-      t += 250 + ((i*17)%50); // microsegundos
-      this.onLine([a,b,c].join(',') + ':' + t);
+
+    // Tick de “medio período” del bit 0: cada tick hay un posible toggle.
+    // Redondeo a entero para mantener µs enteros.
+    const halfTickUs = Math.max(1, Math.floor(this.basePeriodUs / 2));
+
+    let t = 0; // tiempo absoluto en microsegundos desde el inicio
+
+    // i = 1..samples; en cada tick vemos qué bits deben conmutar.
+    for (let i = 1; i <= samples; i++) {
+      t += halfTickUs;
+
+      // mask24 tiene 1s en los bits que conmutan en este instante.
+      // El bit k conmuta cada 2^k ticks -> su período es basePeriodUs * 2^k.
+      let mask24 = 0;
+      for (let k = 0; k < N; k++) {
+        const every = 1 << k;          // cada cuántos ticks conmuta el bit k
+        if (i % every === 0) mask24 |= (1 << k);
+      }
+
+      // Dividir máscara en 3 bytes (a,b,c)
+      const a =  mask24        & 0xFF;
+      const b = (mask24 >> 8)  & 0xFF;
+      const c = (mask24 >> 16) & 0xFF;
+
+      this.onLine([a, b, c].join(',') + ':' + t);
     }
-    // detener simulación después de enviar todo
-    setTimeout(() => { this.running = false; }, 0);
+
+    this.running = false;
   }
-  async close(): Promise<void> { clearInterval(this.timer); this.onStatus('Simulador detenido'); }
+
+  async close(): Promise<void> {
+    this.onStatus('Simulator Stopped');
+  }
 }

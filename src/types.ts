@@ -2,7 +2,7 @@ export type TimeFormat = 'ms' | 'μs';
 
 export interface Config {
   board: 'MEGA' | 'UNO' | 'STM32F1' | 'ESP8266';
-  pinAssignment: number[]; // length 16
+  pinAssignment: number[];
 }
 
 export interface Transport {

@@ -3,33 +3,38 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Logic Analyzer – Web Serial + Canvas (TS)</title>
+    <title>Logic Analyzer – GUI</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
-      <button id="btnConnect" class="btn primary">Conectar</button>
-      <button id="btnSim" class="btn">Simular</button>
+      <button id="btnConnect" class="btn primary">Connect</button>
+      <button id="btnSim" class="btn">Simulate</button>
       <button id="btnStart" class="btn">Start</button>
-      <button id="btnTimes" class="btn">Tiempos: ON</button>
+      <button id="btnTimes" class="btn">TimesStamps: ON</button>
       <button id="btnFormat" class="btn">ms</button>
-      <div class="pill">Reducer
-        <button id="btnReducerDec" class="btn ghost" title="Reducir">–</button>
+    
+      <div class="pill zoom">
+        Zoom
+        <button id="btnReducerDec" class="btn ghost" title="Out">–</button>
         <span id="reducerValue" class="kbd">1.00×</span>
-        <button id="btnReducerInc" class="btn ghost" title="Aumentar">+</button>
+        <button id="btnReducerInc" class="btn ghost" title="In">+</button>
       </div>
-      <button id="btnSave" class="btn">Guardar PNG</button>
+    
+      <button id="btnSave" class="btn">Save PNG</button>
       <span id="status" class="right" title="Estado"></span>
+      <button id="btnReset" class="btn">Reset</button>
     </header>
+    
 
     <div id="canvasWrap"><canvas id="scope"></canvas></div>
     <div class="sep"></div>
     <footer class="footer">
       <div>
-        <span class="pill">←→: eventos • ↑↓: canal • Rueda: scroll • Shift+Rueda: fino</span>
-        <span class="pill">Click canal para marcar</span>
+        <span class="info-pill">Navigation: ←→: jump events • ↑↓: change channel • Wheel: scroll • Shift+Wheel: fine scroll</span>
+        <span class="info-pill">Select a Signal Using Click</span>
+        <span class="info-pill">Compatible Browsers: Chrome/Edge (Web Serial Dependency)</span>
       </div>
-      <div class="pill">Navegadores compatibles: Chrome/Edge (Web Serial)</div>
     </footer>
 
     <script type="module" src="/src/main.ts"></script>

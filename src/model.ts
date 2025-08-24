@@ -1,44 +1,56 @@
 import type { TimeFormat } from './types';
 
 export class LogicData {
-  initial = new Uint32Array(3);
   samples = 0;
   event = 0;
-  pinChanged: Uint32Array[] | null = null; // [samples][3]
+  initial: Uint8Array | null = null;
+  pinChanged: Uint8Array[] | null = null;
   usTime: Float32Array | null = null;
-  xTime: Float32Array | null = null;
-  state: boolean[][][] | null = null; // [samples][8][3]
+  scaledTime: Float32Array | null = null;
+  state: boolean[][][] | null = null;
   ready = false;
 
   reset() {
-    this.initial.fill(0);
+    this.initial?.fill(0);
     this.samples = 0;
     this.event = 0;
     this.pinChanged = null;
     this.usTime = null;
-    this.xTime = null;
+    this.scaledTime = null;
     this.state = null;
     this.ready = false;
   }
 
-  beginFrame(init0: number, init1: number, init2: number, samples: number) {
-    this.initial[0] = init0 >>> 0;
-    this.initial[1] = init1 >>> 0;
-    this.initial[2] = init2 >>> 0;
+  beginFrame(initials: Uint8Array, samples: number) {
+    // Store the provided Uint8Array (make a copy if you don’t want external mutation)
+    this.initial = new Uint8Array(initials); 
+  
     this.samples = samples >>> 0;
     this.event = 0;
     this.ready = false;
-    this.pinChanged = Array.from({ length: samples }, () => new Uint32Array(3));
+  
+    // Allocate per-sample structures
+    this.pinChanged = Array.from(
+      { length: samples },
+      () => new Uint8Array(initials.length)   // same length as initial
+    );
+  
     this.usTime = new Float32Array(samples);
-    this.xTime = new Float32Array(samples);
-    this.state = Array.from({ length: samples }, () => Array.from({ length: 8 }, () => new Array(3).fill(false)));
+    this.scaledTime = new Float32Array(samples);
+  
+    this.state = Array.from(
+      { length: samples },
+      () =>
+        Array.from(
+          { length: 8 },
+          () => new Array(initials.length).fill(false)
+        )
+    );
   }
 
-  setEvent(i: number, a: number, b: number, c: number, timeUs: number) {
+  setEvent(i: number, signal_events: Uint8Array, timeUs: number) {
     if (!this.pinChanged || !this.usTime) return;
-    this.pinChanged[i][0] = a >>> 0;
-    this.pinChanged[i][1] = b >>> 0;
-    this.pinChanged[i][2] = c >>> 0;
+    this.pinChanged[i] = new Uint8Array(signal_events);
     this.usTime[i] = +timeUs;
     this.event = i + 1;
     if (this.event === this.samples) this.finalize();
@@ -55,8 +67,8 @@ export class LogicData {
   }
 
   scaleTime(timeFormat: TimeFormat, reducer: number) {
-    if (!this.usTime || !this.xTime) return;
+    if (!this.usTime || !this.scaledTime) return;
     const scale = (timeFormat === 'ms') ? (1000 * reducer) : (1 * reducer);
-    for (let i = 0; i < this.samples; i++) this.xTime[i] = this.usTime[i] / scale;
+    for (let i = 0; i < this.samples; i++) this.scaledTime[i] = this.usTime[i] / scale;
   }
 }
