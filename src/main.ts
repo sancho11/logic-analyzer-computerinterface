@@ -17,7 +17,6 @@ const statusEl = $('status');
 function setStatus(text: string) { statusEl.textContent = text; }
 
 $('btnConnect').addEventListener('click', async () => {
-  // @ts-expect-error serial may not exist
   if (!('serial' in navigator)) { setStatus('This browser does not support Web Serial'); return; }
   try { await transport.close().catch(()=>{}); } catch {}
   transport = new SerialTransport(115200);
@@ -46,44 +45,28 @@ $('btnSave').addEventListener('click', () => {
 });
 $('btnReset').addEventListener('click', () => { controller.resetData(); });
 
-
-
-view.canvas.addEventListener('click', (e) => {
-  const r = view.canvas.getBoundingClientRect();
-  controller.onClick(e.clientX - r.left, e.clientY - r.top);
-});
-
-view.canvas.addEventListener('wheel', (ev:WheelEvent) => {
-  controller.onWheel(ev);
-  }, { passive: false });
-
-  this.canvas.addEventListener('mousemove', (ev) => {
-    const p = this.pos(ev);
-    if (this.overScroll(p.x, p.y)) this.canvas.style.cursor = 'pointer';
-    else if (this.channelAt(p.x, p.y) !== -1) this.canvas.style.cursor = 'pointer';
-    else this.canvas.style.cursor = 'default';
-    if (this.scrollBar.dragging) {
-      this.setScroll(p.x - this.scrollBar.width / 2);
-      this.requestDraw();
-    }
-  });
-  this.canvas.addEventListener('mousedown', (ev) => {
-    const p = this.pos(ev);
-    if (this.overScroll(p.x, p.y)) this.scrollBar.dragging = true;
-  });
-  window.addEventListener('mouseup', () => { this.scrollBar.dragging = false; });
-
-window.addEventListener('keydown', (e) => {
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) {
-    controller.handleKey(e.code as any);
-    e.preventDefault();
-  }
-});
-
 window.addEventListener('resize', () => view.resize());
-view.resize();
+
+
+view.canvas.addEventListener('click', (e: MouseEvent) => {
+  const { x, y } = view.pos(e);
+  controller.onClick(x, y);
+});
+
+view.canvas.addEventListener('wheel', (ev:WheelEvent) => {controller.onWheel(ev);}, { passive: false });
+
+//ScrollBar Control Logic Using Cursor
+view.canvas.addEventListener('mousemove', (ev: MouseEvent)    => {controller.onmouseMove(ev);}, { passive: false });
+view.canvas.addEventListener('mousedown', (ev: MouseEvent)    => {controller.onmouseDown(ev);}, { passive: false });
+view.canvas.addEventListener('mouseup',   (ev: MouseEvent)    => {controller.onmouseUp(ev);},   { passive: false });
+
+//Keyboard Interactions: Needs to be attached to window and not the canvas, since directionals do not interact with the canvas.
+window.addEventListener('keydown',   (ev: KeyboardEvent) => {controller.onkeyDown(ev);},   { passive: false });
+
+
 
 // Estado inicial UI
 $('btnFormat').textContent = controller.timeFormat;
 $('reducerValue').textContent = fmt(controller.reducer) + '×';
 setStatus('Ready. Connect your MCU or use the sim and press "Start".');
+view.setScroll(0);//Set initial scrollbar position

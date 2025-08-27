@@ -1,3 +1,4 @@
+import {Config} from './types';
 export const COLORS = { white: '#ffffff', black: '#000000', green: '#00FF00', red: '#FF0000', grey: '#969696', orange: '#EF7F1A' } as const;
 export const CHANNEL_COUNT = 16;
 export const ROW_H = 36;
@@ -8,10 +9,10 @@ export const FONT = '12px ui-monospace, monospace';
 export const GRID_DASH: [number, number] = [1, 50];
 export const TIME_DASH: [number, number] = [5, 8];
 
-export const DEFAULT_CONFIG = {
-  board: 'MEGA',
-  pinAssignment: [10,11,12,13,14,15,16,17,20,21,22,23,24,25,26,27]
-};
+export const DEFAULT_CONFIG: Config = {
+	board: 'MEGA',
+	pinAssignment: [10,11,12,13,14,15,16,17,20,21,22,23,24,25,26,27],
+  };
 
 export type Board = typeof DEFAULT_CONFIG['board'];
 

@@ -48,7 +48,7 @@ export class Controller {
   async startCapture() {
     await this.transport.write('G');
     this.setStatus('Retrieving Data');
-    this.view.setScroll(0);
+    //this.view.setScroll(0);
     this.view.requestDraw();
   }
 
@@ -61,59 +61,107 @@ onClick(x: number, y: number) {
   this.isAnyChannelMarked = true;
 }
 
-// Closely follows Processing getChannelCursorCurrentEvent()
-private getChannelCursorCurrentEvent(channel: number, mouseX: number) {
-  const t = this.view.xToTime(mouseX); // data time under mouse
-  this.channelCursor.channel = channel;
+private xToTimeFromScroll(): number {
+  const times = this.data!.scaledTime!;
+  const t0 = times[0];
+  const tN = times[times.length - 1];
+  const dt = tN - t0;
 
-  if (!this.data.scaledTime?.length) return;
+  const trackMin = this.view.xEdge;
+  const trackMax = (this.view.canvas.width / this.view.pixelRatio) - this.view.scrollBar.width;
+  const left     = this.view.scrollBar.left;
+  const handleSpan = Math.max(1, trackMax - trackMin); // evita /0
 
-  let idx = 0;
-  const times = this.data.scaledTime;
-  const samples = times.length;
-
-  if (channel !== CHANNEL_COUNT) {
-    const [i1, i2] = this.view.indexFromAssignment(channel); // you already have this helper
-    if (t <= 0) idx = 0;
-    else if (t >= times[samples - 1]) idx = samples - 1;
-    else {
-      // find last transition strictly before anchor t, honoring state[i][i1][i2]
-      for (let i = 1; i < samples - 1; i++) {
-        const compare = (times[i] + times[i + 1]) - (2 * t);
-        if (compare < 0) {
-          if (this.data.state![i][i1][i2]) idx = i;
-        } else break;
-      }
-    }
-  } else {
-    // "ALL" row uses index only
-    idx = this.channelCursor.sample;
-  }
-
-  this.channelCursor.sample = idx;
-  this.view.setCursor(this.channelCursor);
-  this.view.requestDraw();
-  this.centerViewportOnIndex(idx); // like movepos()
+  const tStart = t0 + ((left - trackMin) / handleSpan)*(dt);// - visibleSpan);
+  return tStart; //tStart + visibleSpan;
 }
 
-private centerViewportOnIndex(i: number) {
-  const t = this.data.scaledTime?.[i] ?? 0;
-  const span = this.view.viewport.span;
-  this.view.viewport.t0 = t - span / 2;
-  this.view.viewport.t1 = t + span / 2;
-  this.view.viewport.clamp();
-  this.view.syncScrollFromViewport();
+// upper_bound: primer índice con times[i] > t
+private upperBound(times: Float32Array<ArrayBufferLike>, t: number): number {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid + 1; else hi = mid;
+  }
+  return lo; // puede devolver 0..n
+}
+
+// -----------------------------------------
+
+private getChannelCursorCurrentEvent(channel: number, mouseX: number) {
+  const times = this.data?.scaledTime;
+  if (!times || times.length === 0) return;
+
+  const n = times.length;
+
+  const t = this.xToTimeFromScroll();
+
+  let idx = Math.max(0, Math.min(n - 1, this.upperBound(times, t) - 1));
+  console.log({
+    "mouseX":mouseX,
+    "t":t,
+    "idx":idx
+  });
+
+  // 3) (Opcional) Validar por state y elegir el válido más cercano
+  if (channel < CHANNEL_COUNT && this.data.state) {
+    const [i1, i2] = this.view.indexFromAssignment(channel);
+
+    if (!this.data.state[idx][i1][i2]) {
+      // Busca el válido más cercano alrededor de idx (rompe temprano si mejora no es posible)
+      let best = -1, bestDist = Infinity;
+      let L = idx - 1, R = idx + 1;
+
+      const consider = (k: number) => {
+        const dist = Math.abs(times[k] - t);
+        if (dist < bestDist) { bestDist = dist; best = k; }
+      };
+
+      if (this.data.state[idx][i1][i2]) best = idx, bestDist = 0; // por si acaso
+
+      while (L >= 0 || R < n) {
+        if (R < n && this.data.state[R][i1][i2]) consider(R);
+        if (L >= 0 && this.data.state[L][i1][i2]) consider(L);
+
+        // Heurística de corte: si el siguiente candidato posible ya está más lejos que best, terminamos
+        const nextGap = Math.min(
+          L >= 0 ? Math.abs(times[L] - t) : Infinity,
+          R < n ? Math.abs(times[R] - t) : Infinity
+        );
+        if (best >= 0 && nextGap > bestDist) break;
+
+        R++; L--;
+      }
+      if (best >= 0) idx = best;
+    }
+  }
+
+  // 4) Actualiza cursor
+  this.channelCursor.channel = channel;
+  this.channelCursor.enabled = true;
+  this.channelCursor.sample  = idx;
+
+  this.view.setCursor(this.channelCursor);
   this.view.requestDraw();
 }
 
 unmarkChannel() { this.isAnyChannelMarked = false; this.view.clearCursor(); this.view.requestDraw(); }
 
 // === Keyboard nav — mirrors Processing keyPressed() ===
-handleKey(code: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight') {
+handleDirectionals(ev: KeyboardEvent) {
+  ev.preventDefault();
+  const code: string =ev.code //'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight'
   if (!this.isAnyChannelMarked) {
     // left/right pans when no channel is marked
-    if (code === 'ArrowLeft')  this.view.panPx(-1);
-    if (code === 'ArrowRight') this.view.panPx(+1);
+    const delta = (600) * (this.timeFormat === 'ms' ? this.reducer : this.reducer * 0.001);
+    if (code === 'ArrowLeft'){
+      this.view.nudgeScroll(-delta);
+      this.view.requestDraw();
+    }
+    else if (code === 'ArrowRight'){
+      this.view.nudgeScroll(+delta);
+      this.view.requestDraw();
+    }
     return;
   }
   const cur = this.channelCursor;
@@ -121,7 +169,7 @@ handleKey(code: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight') {
   if (code === 'ArrowUp') {
     const prev = cur.channel;
     cur.channel = this.prevEnabledChannel(prev);
-    if (cur.channel === -1) cur.channel = prev; // no change if none
+    if (cur.channel === -1){cur.channel = prev; return;} // no change if none
     this.view.setCursor(cur); this.view.requestDraw();
     return;
   }
@@ -143,7 +191,9 @@ handleKey(code: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight') {
         if (this.data.state![i][i1][i2]) break;
       }
     }
-    this.view.setCursor(cur); this.centerViewportOnIndex(cur.sample);
+    this.view.setCursor(cur); 
+    this.view.centerScrollOnIndex(cur.sample);
+    this.view.requestDraw();
     return;
   }
 
@@ -157,8 +207,46 @@ handleKey(code: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight') {
         if (this.data.state![i][i1][i2]) break;
       }
     }
-    this.view.setCursor(cur); this.centerViewportOnIndex(cur.sample);
+    this.view.setCursor(cur);
+    this.view.centerScrollOnIndex(cur.sample);
+    this.view.requestDraw();
     return;
+  }
+  this.view.requestDraw();
+}
+
+onmouseMove(ev:MouseEvent){
+    ev.preventDefault();
+    //ScrollBar Control Logic
+    const p = this.view.pos(ev);
+    if (this.view.overScroll(p.x, p.y)) this.view.canvas.style.cursor = 'pointer';
+    else if (this.view.channelAt(p.x, p.y) !== -1) this.view.canvas.style.cursor = 'pointer';
+    else this.view.canvas.style.cursor = 'default';
+    if (this.view.scrollBar.dragging) {
+      this.view.setScroll(p.x - this.view.scrollBar.width / 2);
+      this.view.requestDraw();
+    }
+}
+
+onmouseDown(ev:MouseEvent){
+  ev.preventDefault();
+  //ScrollBar Control Logic
+  const p = this.view.pos(ev);
+  if (this.view.overScroll(p.x, p.y)){
+    this.view.scrollBar.dragging=true
+  }
+}
+
+onmouseUp(ev:MouseEvent){
+  ev.preventDefault();
+  //ScrollBar Control Logic
+  this.view.scrollBar.dragging=false
+}
+
+onkeyDown(ev:KeyboardEvent){
+  //Directional handle logic
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(ev.code)){
+    this.handleDirectionals(ev);
   }
 }
 
@@ -174,10 +262,10 @@ private nextEnabledChannel(start: number) {
 
 // === Wheel (PAN only, like the original) ===
 onWheel(ev: WheelEvent) {
-  const delta = (ev.shiftKey ? 10 : 50) * (this.timeFormat === 'ms' ? this.reducer : this.reducer * 0.001);
+  ev.preventDefault();
+  const delta = (ev.shiftKey ? 200 : 800) * (this.timeFormat === 'ms' ? this.reducer : this.reducer * 0.001);
   this.view.setScroll(this.view.scrollBar.left - Math.sign(ev.deltaY) * delta);
   this.view.requestDraw();
-  ev.preventDefault();
 }
 
 // === Reducer / scale — zoom without moving the center ===
@@ -198,13 +286,22 @@ changeReducer(increase: boolean) {
   }
   const anchorPx = this.view.cssWidth / 2; // keep center fixed
   const factor = increase ? 1.1 : 1 / 1.1;
-  this.view.zoomAround(anchorPx, factor);
+  //this.view.zoomAround(anchorPx, factor);
   this.reducer = +r.toFixed(2);
   this.data.scaleTime(this.timeFormat, this.reducer);
   this.view.setData(this.data, this.timeFormat, this.reducer, this.drawTimes);
+  //this.view.setScroll(0)
+  //Keep zoom over cursor
+  this.view.updatescaledShiftFromScroll();
+
   this.view.requestDraw();
 }
 
 toggleTimes() { this.drawTimes = !this.drawTimes; this.view.setDrawTimes(this.drawTimes); this.view.requestDraw(); }
-toggleFormat() { this.timeFormat = (this.timeFormat === 'ms') ? 'μs' : 'ms'; this.data.scaleTime(this.timeFormat, this.reducer); this.view.setData(this.data, this.timeFormat, this.reducer, this.drawTimes); this.view.requestDraw(); }
+toggleFormat() {
+  this.timeFormat = (this.timeFormat === 'ms') ? 'μs' : 'ms';
+  this.data.scaleTime(this.timeFormat, this.reducer);
+  this.view.setData(this.data, this.timeFormat, this.reducer, this.drawTimes);
+  this.view.updatescaledShiftFromScroll(); this.view.requestDraw();
+}
 }
