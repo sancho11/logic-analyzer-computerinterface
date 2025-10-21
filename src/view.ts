@@ -2,7 +2,6 @@ import { COLORS, CHANNEL_COUNT, ROW_H, SIGNAL_H, PIN_LABEL_W, SCROLLBAR_H, GRID_
 import type { Config, Cursor } from './types';
 import type { LogicData } from './model';
 import { clamp } from './utils';
-import { Viewport } from './viewport';
 
 export class View {
   canvas: HTMLCanvasElement;
@@ -20,7 +19,6 @@ export class View {
   requested = false;
   //cursor: Cursor = { sample: 0, channel: CHANNEL_COUNT, enabled: false };
   cursor: Cursor | null = null; // { sample: number; channel: 0..15 or CHANNEL_COUNT (ALL) }
-  viewport = new Viewport();
   pixelRatio = 1;
   pinArduinoNames: number[] = new Array(CHANNEL_COUNT).fill(0);
 
@@ -34,7 +32,7 @@ export class View {
     this.ctx = ctx;
     this.config = config;
     this.recomputePinLabels();
-    this.installEvents();
+    //this.installEvents();
     this.resize();
   }
 
@@ -47,16 +45,12 @@ export class View {
     });
   }
 
+  xToTime(mouseX: number){
+   return 0;
+  }
+
   get cssWidth()  { return this.canvas.clientWidth || window.innerWidth; }
   get cssHeight() { return this.canvas.clientHeight || (window.innerHeight - 130); }
-
-  attachData(data: LogicData) {
-    this.data = data;
-    const tMin = 0;
-    const tMax = data.scaledTime?.length ? data.scaledTime[data.scaledTime.length - 1] : 1;
-    this.viewport.setDataExtents(tMin, tMax);
-    this.requestDraw();
-  }
 
   setData(data: LogicData, timeFormat: 'ms' | 'μs', reducer: number, drawTimes: boolean) {
     this.data = data; this.timeFormat = timeFormat; this.reducer = reducer; this.drawTimes = drawTimes;
@@ -78,8 +72,47 @@ export class View {
     this.scrollBar.left = clamp(px, this.xEdge, max);
     this.updatescaledShiftFromScroll();
   }
+
   nudgeScroll(dx: number) { this.setScroll(this.scrollBar.left + dx); this.requestDraw(); }
-  setscaledShift(v: number) { this.scaledShift = v; }
+
+  centerScrollOnIndex(i: number) {
+    const d = this.data;
+    if (!d?.scaledTime || d.samples <= 0) return;
+  
+    // Asegura índice válido
+    const idx = Math.max(0, Math.min(i, d.samples - 1));
+  
+    // Tiempos (soporta que no empiece en 0)
+    const t0 = d.scaledTime[0];
+    const t1 = d.scaledTime[d.samples - 1];      // <- en vez de [-1]
+    const ti = d.scaledTime[idx];
+  
+    // Pista del scrollbar (rango donde se mueve el handle)
+    const trackMin = this.xEdge;
+    const trackMax = this.canvas.width / this.pixelRatio - this.scrollBar.width
+    const trackSpan = Math.max(0, trackMax - trackMin);
+  
+    // Casos borde: sin rango temporal o sin espacio para desplazar
+    if (t1 <= t0 || trackSpan === 0) {
+      this.scrollBar.left = trackMin;
+      this.updatescaledShiftFromScroll();
+      return;
+    }
+  
+    // Ratio dentro del rango temporal total
+    const r = Math.max(0, Math.min(1, (ti - t0) / (t1 - t0)));
+  
+    // Posición ideal del centro del viewport sobre 'ti'
+    const leftWanted = trackMin + r * trackSpan;
+
+    // Para centrar: mueve el BORDE IZQUIERDO medio "viewport" hacia la izquierda
+    //const leftWanted = centerOnTi; //- (this.scrollBar.width / 2)*(1-r);
+    
+    // Aplica límites y actualiza el shift
+    this.scrollBar.left = clamp(leftWanted, trackMin, trackMax);
+    this.updatescaledShiftFromScroll();
+  }
+
 
   updatescaledShiftFromScroll() {
     const xEnd = this.data?.scaledTime?.[this.data.samples - 1] ?? 0;
@@ -90,38 +123,21 @@ export class View {
 
   requestDraw() { if (this.requested) return; this.requested = true; requestAnimationFrame(() => { this.requested = false; this.draw(); }); }
 
-  private installEvents() {
-    window.addEventListener('resize', () => this.resize());
-    this.canvas.addEventListener('wheel', (ev) => {
-      const delta = (ev.shiftKey ? 10 : 50) * (this.timeFormat === 'ms' ? this.reducer : this.reducer * 0.001);
-      this.setScroll(this.scrollBar.left - Math.sign(ev.deltaY) * delta);
-      this.requestDraw();
-      ev.preventDefault();
-    }, { passive: false });
-    this.canvas.addEventListener('mousemove', (ev) => {
-      const p = this.pos(ev);
-      if (this.overScroll(p.x, p.y)) this.canvas.style.cursor = 'pointer';
-      else if (this.channelAt(p.x, p.y) !== -1) this.canvas.style.cursor = 'pointer';
-      else this.canvas.style.cursor = 'default';
-      if (this.scrollBar.dragging) {
-        this.setScroll(p.x - this.scrollBar.width / 2);
-        this.requestDraw();
-      }
-    });
-    this.canvas.addEventListener('mousedown', (ev) => {
-      const p = this.pos(ev);
-      if (this.overScroll(p.x, p.y)) this.scrollBar.dragging = true;
-    });
-    window.addEventListener('mouseup', () => { this.scrollBar.dragging = false; });
+  pos(ev: MouseEvent) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+  
+    const scaleX = this.canvas.width  / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+  
+    return { x: x * scaleX, y: y * scaleY };
   }
 
-  private pos(ev: MouseEvent) {
-    const rect = this.canvas.getBoundingClientRect();
-    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
-  }
-  private overScroll(x: number, y: number) {
+  overScroll(x: number, y: number) {
     return x >= this.scrollBar.left && x <= this.scrollBar.left + this.scrollBar.width && y >= this.scrollBar.top && y <= this.scrollBar.top + this.scrollBar.height;
   }
+
   channelAt(x: number, y: number): number | null {
     if (x < this.xEdge || x > this.cssWidth) return null;
     // channels 0..15 stacked from yEdge, each ROW_H tall; "ALL" row sits above the scrollbar
@@ -130,26 +146,6 @@ export class View {
     // ALL row
     if (y >= this.yBottom - ROW_H && y < this.yBottom) return CHANNEL_COUNT;
     return null;
-  }
-
-  timeToX(t: number) { return this.viewport.timeToPx(t); }
-  xToTime(x: number) { return this.viewport.pxToTime(x); }
-
-  panPx(dx: number)  { this.viewport.panPx(dx); this.syncScrollFromViewport(); this.requestDraw(); }
-  zoomAround(px: number, factor: number) { this.viewport.zoom(factor, px); this.syncScrollFromViewport(); this.requestDraw(); }
-
-  // keep scroll bar and viewport center in sync
-  syncScrollFromViewport() {
-    const center = this.viewport.center;
-    const left = this._map(center, this.viewport.tMin, this.viewport.tMax, this.xEdge, this.cssWidth - this.scrollBar.width);
-    this.scrollBar.left = Math.max(this.xEdge, Math.min(this.cssWidth - this.scrollBar.width, left));
-  }
-  syncViewportFromScroll() {
-    const center = this._map(this.scrollBar.left, this.xEdge, this.cssWidth - this.scrollBar.width, this.viewport.tMin, this.viewport.tMax);
-    const span = this.viewport.span;
-    this.viewport.t0 = center - span / 2;
-    this.viewport.t1 = center + span / 2;
-    this.viewport.clamp();
   }
 
   resize() {
@@ -161,8 +157,7 @@ export class View {
     this.ctx.setTransform(dpi, 0, 0, dpi, 0, 0);
     this.yBottom = cssH - SCROLLBAR_H;
     this.scrollBar.top = this.yBottom;
-    this.viewport.setCanvasWidth(cssW);
-    this.syncScrollFromViewport();
+    //this.syncScrollFromViewport();
     this.requestDraw();
   }
 
@@ -171,13 +166,12 @@ export class View {
     const W = this.cssWidth, H = this.cssHeight;
     ctx.clearRect(0, 0, W, H);
     this.drawLabelsAndGrid(W,H);
-    this.drawCursor(W,H);
+    this.drawChannelHighlight(W,H);
     this.drawSignals(W,H);
-    this.drawCursorHighlight();
     this.drawScrollBar();
   }
 
-  private drawCursorHighlight() {
+  private drawChannelHighlight(W: number, H: number) {
     if (!this.cursor) return;
     const ctx = this.ctx;
     ctx.save();
@@ -188,8 +182,8 @@ export class View {
       ? this.yBottom - ROW_H
       : this.yEdge + ROW_H * this.cursor.channel - 2;
 
-    const width = this.cssWidth - this.xEdge;
-    ctx.fillRect(0, y, width, ROW_H - 2);
+    const width = W - this.xEdge;
+    ctx.fillRect(this.xEdge, y, width, ROW_H - 2);
     ctx.restore();
   }
 
@@ -213,16 +207,6 @@ export class View {
     ctx.fillText('EVENTS', x, H - SCROLLBAR_H - ROW_H + 35);
   }
 
-  private drawCursor(W: number, H: number) {
-    const ctx = this.ctx; if (!this.cursor?.enabled || !this.cursor) return;
-    ctx.fillStyle = '#323232'; ctx.strokeStyle = '#4b4b4b';
-    if (this.cursor.channel === CHANNEL_COUNT) ctx.fillRect(0, this.yBottom - ROW_H, W - this.xEdge, ROW_H - 2);
-    else {
-      const y = this.yEdge + ROW_H * this.cursor.channel - 2;
-      ctx.fillRect(0, y, W - this.xEdge, ROW_H - 2);
-    }
-  }
-
   private drawSignals(_W: number, _H: number) {
     const data = this.data;
     if (!data || !data.ready || !data.scaledTime || !data.usTime || !data.initial) return;
@@ -235,69 +219,90 @@ export class View {
     ctx.fillStyle = COLORS.green;
     ctx.lineWidth = 1;
   
-    let yPos = this.yEdge;
-    let textCovered = false;
+    // --- NUEVO: precomputar límites de los NO cambios (primer y último evento)
+    const xStartUnshifted = data.scaledTime[0];                         // primer NO cambio
+    //const xStart = xStartUnshifted + this.scaledShift;
+    const xEnd = data.scaledTime[data.samples - 1] + this.scaledShift;  // último NO cambio
   
-    // Per-frame buffers (like original)
-    this._xPos = new Array(CHANNEL_COUNT).fill(0);      // last x (unshifted) per channel
-    this._isLow = new Map<string, boolean>();           // current level BEFORE change (true = low)
+    // --- Buffers por cuadro
+    //     Empezamos cada canal en el primer NO cambio, para poder trazar hasta el primer cambio.
+    this._xPos = new Array(CHANNEL_COUNT).fill(xStartUnshifted); // último x SIN shift por canal
+    this._isLow = new Map<string, boolean>();                    // nivel "antes del cambio" (true=LOW)
+  
+    // --- NUEVO: metadatos por canal para evitar recomputar
+    const chKey: (string | null)[] = new Array(CHANNEL_COUNT).fill(null);
+    const chIdx1: number[] = new Array(CHANNEL_COUNT);
+    const chIdx2: number[] = new Array(CHANNEL_COUNT);
+    const chY: number[] = new Array(CHANNEL_COUNT);
+    const hadChange: boolean[] = new Array(CHANNEL_COUNT).fill(false);
+  
+    for (let n = 0; n < CHANNEL_COUNT; n++) {
+      chY[n] = this.yEdge + n * ROW_H;
+      if (this.pinArduinoNames[n] !== 0) {
+        const [i1, i2] = this.indexFromAssignment(n);
+        chIdx1[n] = i1; chIdx2[n] = i2;
+        const key = `${i1}-${i2}`;
+        chKey[n] = key;
+  
+        // Inicializa UNA VEZ el nivel desde el bit inicial.
+        // (Mantenemos tu convención actual: bit===0 => isLow=true)
+        if (!this._isLow.has(key)) {
+          const bit = (data.initial[i2] >> i1) & 1;
+          this._isLow.set(key, bit === 0);
+        }
+      } else {
+        chIdx1[n] = 0; chIdx2[n] = 0;
+      }
+    }
+  
+    let textCovered = false;
   
     for (let i = 0; i < data.samples; i++) {
       let cares = false;
-      let firstchange = 0;
-      yPos = this.yEdge;
+      let firstchangeY = 0;
   
       for (let n = 0; n < CHANNEL_COUNT; n++) {
-        if (this.pinArduinoNames[n] !== 0) {
-          const [idx1, idx2] = this.indexFromAssignment(n);
+        if (this.pinArduinoNames[n] === 0) continue;
   
-          // state[i][idx1][idx2] is interpreted as "there is a change at this sample"
-          if (data.state![i][idx1][idx2]) {
-            cares = true;
-            if (firstchange === 0) firstchange = yPos;
+        const idx1 = chIdx1[n];
+        const idx2 = chIdx2[n];
   
-            const ySave = yPos;
-            const key = `${idx1}-${idx2}`;
+        // state[i][idx1][idx2] == true  => hay cambio en este sample para este canal
+        if (data.state![i][idx1][idx2]) {
+          cares = true;
+          if (firstchangeY === 0) firstchangeY = chY[n];
   
-            // Initialize level ONCE from initial bit: 0 = HIGH, 1 = LOW  → store isLow = (bit === 1)
-            if (!this._isLow.has(key)) {
-              const bit = (data.initial[idx2] >> idx1) & 1;
-              this._isLow.set(key, bit === 1);
-            }
+          const key = chKey[n]!;
+          const wasLow = this._isLow.get(key)!;
   
-            const wasLow = this._isLow.get(key)!;
+          // Rail previo y rail destino
+          const yPrev = wasLow ? (chY[n] + SIGNAL_H) : chY[n];
+          const yNext = wasLow ? chY[n] : (chY[n] + SIGNAL_H);
   
-            // Horizontal line at previous level (rail), then vertical transition to the other rail
-            const yLine = wasLow ? (yPos + SIGNAL_H) : yPos;   // previous rail
-            const yDiff = wasLow ? yPos : (yPos + SIGNAL_H);   // other rail
+          // FIX existente: aplicar scaledShift a ambos extremos
+          const x0 = (this._xPos[n] ?? xStartUnshifted) + this.scaledShift;
+          const x1 = data.scaledTime[i] + this.scaledShift;
   
-            // FIX: apply scaledShift to BOTH endpoints (start and end)
-            const x0 = (this._xPos[n] ?? 0) + this.scaledShift;
-            const x1 = data.scaledTime[i] + this.scaledShift;
+          // Horizontal al nivel previo
+          ctx.beginPath();
+          ctx.moveTo(x0, yPrev);
+          ctx.lineTo(x1, yPrev);
+          ctx.stroke();
   
-            // Draw horizontal (previous level) and then vertical (transition)
-            ctx.beginPath();
-            ctx.moveTo(x0, yLine);
-            ctx.lineTo(x1, yLine);
-            ctx.stroke();
+          // Vertical de transición
+          ctx.beginPath();
+          ctx.moveTo(x1, yPrev);
+          ctx.lineTo(x1, yNext);
+          ctx.stroke();
   
-            ctx.beginPath();
-            ctx.moveTo(x1, yLine);
-            ctx.lineTo(x1, yDiff);
-            ctx.stroke();
-  
-            // Update last x (unshifted, like original) and toggle level for next time
-            this._xPos[n] = data.scaledTime[i];
-            this._isLow.set(key, !wasLow);
-  
-            // Restore y for next channel row
-            yPos = ySave;
-          }
+          // Actualiza último x (sin shift) y alterna nivel para la próxima
+          this._xPos[n] = data.scaledTime[i];
+          this._isLow.set(key, !wasLow);
+          hadChange[n] = true;
         }
-        yPos += ROW_H; // next channel row
       }
   
-      // Time markers & labels
+      // Marcadores de tiempo y etiquetas (igual que antes)
       if ((this.drawTimes && cares) || i === 0) {
         ctx.setLineDash(TIME_DASH);
   
@@ -307,7 +312,7 @@ export class View {
   
         const xTime = data.scaledTime[i] + this.scaledShift;
         ctx.beginPath();
-        ctx.moveTo(xTime, firstchange);
+        ctx.moveTo(xTime, firstchangeY || this.yEdge);
         ctx.lineTo(xTime, this.yBottom);
         ctx.stroke();
   
@@ -318,10 +323,31 @@ export class View {
         ctx.fillText(label, xTime + 2, textCovered ? this.yBottom - 10 : this.yBottom);
         textCovered = !textCovered;
   
-        // Back to signal color
+        // Volver al color de señal
         ctx.strokeStyle = COLORS.green;
         ctx.fillStyle = COLORS.green;
       }
+    }
+  
+    // --- NUEVO: “colas” hasta el último NO cambio (xEnd)
+    // Si nunca hubo cambios en el canal, este trazo cubrirá de primer NO cambio a último NO cambio.
+    for (let n = 0; n < CHANNEL_COUNT; n++) {
+      if (this.pinArduinoNames[n] === 0) continue;
+  
+      const key = chKey[n]!;
+      const atLow = this._isLow.get(key)!;           // nivel actual (tras el último cambio, o inicial)
+      const yRail = atLow ? (chY[n] + SIGNAL_H) : chY[n];
+      const x0tail = (this._xPos[n] ?? xStartUnshifted) + this.scaledShift;
+  
+      if (xEnd > x0tail) {
+        ctx.beginPath();
+        ctx.moveTo(x0tail, yRail);
+        ctx.lineTo(xEnd, yRail);
+        ctx.stroke();
+      }
+  
+      // (Opcional: si quieres dibujar explícitamente desde xStart al primer cambio
+      // en canales SIN ningún cambio, ya está cubierto porque _xPos[n] = xStartUnshifted.)
     }
   
     ctx.restore();

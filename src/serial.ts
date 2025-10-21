@@ -2,6 +2,7 @@ import type { Transport } from './types';
 
 export class SerialTransport implements Transport {
   baud: number;
+  // @ts-ignore
   port: SerialPort | null = null;
   reader: ReadableStreamDefaultReader<string> | null = null;
   writer: WritableStreamDefaultWriter<string> | null = null;
@@ -80,7 +81,8 @@ export class SimulationTransport implements Transport {
   constructor(
     private basePeriodUs = 1000,
     private numClocks = 24,
-    private samples = 120
+    private samples = 120,
+    private timezerooffset=1
   ) {}
 
   async connect(): Promise<void> {
@@ -93,11 +95,14 @@ export class SimulationTransport implements Transport {
 
     this.onLine('S');
 
-    // Estados iniciales: todos bajos (0). Tres bytes -> hasta 24 canales.
+    // Estados iniciales: todos bajos (0). Tres bytes -> 24 canales.
     const init = [0,0,0];
     const samples = Math.max(1, this.samples);
     const N = Math.max(1, Math.min(this.numClocks, 24));
+    //Send initial state
     this.onLine(init.join(',') + ':' + samples);
+    //Send initial toggle
+    this.onLine([0,0,0].join(',') + ':' + -(this.timezerooffset));
 
     // Tick de “medio período” del bit 0: cada tick hay un posible toggle.
     // Redondeo a entero para mantener µs enteros.
@@ -124,7 +129,8 @@ export class SimulationTransport implements Transport {
 
       this.onLine([a, b, c].join(',') + ':' + t);
     }
-
+    t += this.timezerooffset;
+    this.onLine([0x0,0x0,0x0].join(',') + ':' + t);
     this.running = false;
   }
 

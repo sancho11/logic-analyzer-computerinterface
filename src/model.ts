@@ -3,6 +3,7 @@ import type { TimeFormat } from './types';
 export class LogicData {
   samples = 0;
   event = 0;
+  currentScale = 1.0;
   initial: Uint8Array | null = null;
   pinChanged: Uint8Array[] | null = null;
   usTime: Float32Array | null = null;
@@ -70,5 +71,6 @@ export class LogicData {
     if (!this.usTime || !this.scaledTime) return;
     const scale = (timeFormat === 'ms') ? (1000 * reducer) : (1 * reducer);
     for (let i = 0; i < this.samples; i++) this.scaledTime[i] = this.usTime[i] / scale;
+    this.currentScale=scale
   }
 }
